@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>핫스팟 리모컨</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --panel:#DFDED7;      /* 계기판 회색 */
+    --panel-deep:#D3D2CA;
+    --ink:#1C1D1B;
+    --muted:#7E7F78;
+    --line:#B9B8AF;
+    --tx:#E8500A;         /* 송신 주황 */
+    --ok:#2E7D4F;         /* 수신 녹색 */
+    --lamp-off:#A9A8A0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    font-family:"IBM Plex Sans KR",sans-serif;
+    background:var(--panel);
+    color:var(--ink);
+    display:flex;align-items:center;justify-content:center;
+    padding:24px;
+  }
+  .remote{
+    width:100%;max-width:420px;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:20px;
+    box-shadow:0 2px 0 rgba(255,255,255,.6) inset, 0 18px 40px rgba(28,29,27,.14);
+    padding:28px 26px 30px;
+  }
+  .head{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--line);padding-bottom:14px}
+  h1{font-size:17px;font-weight:700;letter-spacing:-.01em}
+  .head small{font-family:"IBM Plex Mono",monospace;font-size:10px;color:var(--muted);letter-spacing:.08em}
+
+  /* 시그니처: 수신 램프 */
+  .lamp-row{display:flex;align-items:center;gap:10px;margin:18px 0 4px}
+  .lamp{width:10px;height:10px;border-radius:50%;background:var(--lamp-off);flex:none;transition:background .3s}
+  .lamp.ok{background:var(--ok);box-shadow:0 0 0 3px rgba(46,125,79,.15)}
+  .lamp.tx{background:var(--tx);animation:pulse 1s infinite}
+  @keyframes pulse{50%{box-shadow:0 0 0 6px rgba(232,80,10,.18)}}
+  @media (prefers-reduced-motion:reduce){.lamp.tx{animation:none}}
+  .lamp-label{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);letter-spacing:.04em}
+
+  .readout{
+    font-family:"IBM Plex Mono",monospace;
+    background:var(--panel-deep);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:14px 16px;
+    margin:14px 0 22px;
+    font-size:12.5px;line-height:1.7;color:var(--ink);
+    min-height:74px;
+  }
+  .readout .dim{color:var(--muted)}
+
+  .btns{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  button{
+    font-family:inherit;font-size:16px;font-weight:700;
+    padding:26px 0;border-radius:14px;cursor:pointer;
+    border:1px solid var(--line);
+    background:linear-gradient(#EFEEE8,#E2E1DA);
+    color:var(--ink);
+    box-shadow:0 2px 0 rgba(255,255,255,.7) inset, 0 3px 6px rgba(28,29,27,.12);
+    transition:transform .06s, box-shadow .06s;
+  }
+  button:active{transform:translateY(2px);box-shadow:0 1px 0 rgba(255,255,255,.5) inset}
+  button:focus-visible{outline:2px solid var(--tx);outline-offset:3px}
+  button.on{color:var(--tx)}
+  button:disabled{opacity:.45;cursor:default}
+  .btn-sub{display:block;font-family:"IBM Plex Mono",monospace;font-size:10px;font-weight:400;color:var(--muted);margin-top:5px;letter-spacing:.1em}
+
+  footer{margin-top:22px;padding-top:12px;border-top:1px solid var(--line);
+    font-family:"IBM Plex Mono",monospace;font-size:10px;color:var(--muted);
+    display:flex;justify-content:space-between}
+</style>
+</head>
+<body>
+<main class="remote">
+  <div class="head">
+    <h1>핫스팟 리모컨</h1>
+    <small>HOTSPOT&nbsp;RC-01</small>
+  </div>
+
+  <div class="lamp-row">
+    <span class="lamp" id="lamp"></span>
+    <span class="lamp-label" id="lampLabel">폰 연결 확인 중…</span>
+  </div>
+
+  <div class="readout" id="readout"><span class="dim">상태를 불러오는 중…</span></div>
+
+  <div class="btns">
+    <button class="on" id="btnOn">핫스팟 켜기<span class="btn-sub">TX&nbsp;ON</span></button>
+    <button id="btnOff">핫스팟 끄기<span class="btn-sub">TX&nbsp;OFF</span></button>
+  </div>
+
+  <footer><span>폰 폴링 간격 5초 기준</span><span id="clock"></span></footer>
+</main>
+
+<script>
+const API = "/api/command";
+const $ = id => document.getElementById(id);
+let sending = false;
+
+function fmtAgo(ts){
+  if(!ts) return null;
+  const s = Math.round((Date.now()-ts)/1000);
+  if(s < 60) return s + "초 전";
+  return Math.round(s/60) + "분 전";
+}
+
+function render(state){
+  const lamp = $("lamp"), label = $("lampLabel"), out = $("readout");
+  const seen = state.phoneLastSeen;
+  const alive = seen && (Date.now()-seen) < 20000; // 20초 내 폴링 = 온라인
+
+  lamp.className = "lamp " + (state.pending ? "tx" : (alive ? "ok" : ""));
+  label.textContent = state.pending
+    ? "명령 송신됨 — 폰 수신 대기"
+    : alive ? "폰 온라인 (마지막 확인 " + fmtAgo(seen) + ")"
+    : seen ? "폰 오프라인? 마지막 확인 " + fmtAgo(seen)
+    : "폰이 아직 한 번도 접속하지 않음";
+
+  const hs = state.phoneState === "on" ? "켜짐"
+           : state.phoneState === "off" ? "꺼짐" : "미보고";
+  out.innerHTML =
+    "핫스팟 상태  : " + hs + "<br>" +
+    "대기 중 명령 : " + (state.pending ? (state.pending === "on" ? "켜기" : "끄기") : "<span class='dim'>없음</span>") + "<br>" +
+    "<span class='dim'>명령은 폰이 다음 폴링 때 가져가서 실행합니다.</span>";
+}
+
+async function refresh(){
+  try{
+    const r = await fetch(API);
+    render(await r.json());
+  }catch(e){
+    $("lampLabel").textContent = "서버 연결 실패 — 네트워크 확인";
+    $("lamp").className = "lamp";
+  }
+}
+
+async function send(action){
+  if(sending) return;
+  sending = true;
+  $("btnOn").disabled = $("btnOff").disabled = true;
+  try{
+    const r = await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action})});
+    render(await r.json());
+  }catch(e){
+    $("readout").innerHTML = "명령 전송 실패. 네트워크를 확인한 뒤 다시 시도하세요.";
+  }finally{
+    sending = false;
+    $("btnOn").disabled = $("btnOff").disabled = false;
+  }
+}
+
+$("btnOn").onclick = () => send("on");
+$("btnOff").onclick = () => send("off");
+setInterval(refresh, 3000);
+setInterval(()=>{ $("clock").textContent = new Date().toLocaleTimeString("ko-KR",{hour12:false}); },1000);
+refresh();
+</script>
+</body>
+</html>
